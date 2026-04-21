@@ -4,6 +4,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from .models import Category, Product
 from .serializers import CategorySerializer, ProductSerializer
+from rest_framework import viewsets
+from .models import Granel, Extra
+from .serializers import GranelSerializer, ExtraSerializer, CategorySerializer
+from users.permissions import IsPersonal
 
 
 def get_horario_actual():
@@ -38,3 +42,23 @@ class ProductListView(APIView):
         if categoria_id:
             productos = productos.filter(categoria_id=categoria_id)
         return Response(ProductSerializer(productos, many=True, context={'request': request}).data)
+    
+class GranelViewSet(viewsets.ModelViewSet):
+    queryset = Granel.objects.all()
+    serializer_class = GranelSerializer
+    permission_classes = [IsPersonal]
+
+class ExtraViewSet(viewsets.ModelViewSet):
+    queryset = Extra.objects.all()
+    serializer_class = ExtraSerializer
+    permission_classes = [IsPersonal]
+
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [IsPersonal]
+
+class ProductManageViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+    permission_classes = [IsPersonal]

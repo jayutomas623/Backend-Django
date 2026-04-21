@@ -30,6 +30,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     email            = models.EmailField(unique=True)
     nombre_completo  = models.CharField(max_length=150)
     telefono         = models.CharField(max_length=20, blank=True)
+    direccion        = models.CharField(max_length=255, blank=True, null=True) # NUEVO
+    ci               = models.CharField(max_length=20, blank=True, null=True)  # NUEVO
     fecha_nacimiento = models.DateField(null=True, blank=True)
     sexo             = models.CharField(max_length=1, choices=[('M','Masculino'),('F','Femenino'),('O','Otro')], blank=True)
     rol              = models.CharField(max_length=10, choices=ROL_CHOICES, default='cliente')

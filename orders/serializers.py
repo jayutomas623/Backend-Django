@@ -19,15 +19,27 @@ class CreateOrderSerializer(serializers.Serializer):
         estado  = 'confirmado' if metodo == 'qr' else 'en_espera'
         order   = Order.objects.create(cliente=cliente, metodo_pago=metodo, estado=estado)
         total   = 0
+
         for item_data in validated_data['items']:
             producto = Product.objects.get(id=item_data['producto_id'])
+            cantidad = item_data['cantidad']
+
+            if producto.tipo == 'envasado':
+                if producto.stock is None or producto.stock < cantidad:
+                    raise serializers.ValidationError(
+                        f"Stock insuficiente para: {producto.nombre}"
+                    )
+                producto.stock -= cantidad
+                producto.save()
+
             OrderItem.objects.create(
                 pedido=order,
                 producto=producto,
-                cantidad=item_data['cantidad'],
+                cantidad=cantidad,
                 precio_unitario=producto.precio,
             )
-            total += producto.precio * item_data['cantidad']
+            total += producto.precio * cantidad
+
         order.total = total
         if estado == 'confirmado':
             order.confirmado_en = timezone.now()
@@ -45,9 +57,14 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
-    items  = OrderItemSerializer(many=True, read_only=True)
-    codigo = serializers.UUIDField(read_only=True)
+    items          = OrderItemSerializer(many=True, read_only=True)
+    codigo         = serializers.UUIDField(read_only=True)
+    # Nombre del cliente visible para el personal en el monitor
+    cliente_nombre = serializers.CharField(source='cliente.nombre_completo', read_only=True)
 
     class Meta:
         model  = Order
-        fields = ['id', 'codigo', 'estado', 'metodo_pago', 'total', 'creado_en', 'items']
+        fields = [
+            'id', 'codigo', 'estado', 'metodo_pago', 'total',
+            'creado_en', 'items', 'motivo_cancelacion', 'cliente_nombre',
+        ]

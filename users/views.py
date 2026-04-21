@@ -5,7 +5,8 @@ from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
-
+from .permissions import IsAdmin
+from .serializers import RegisterSerializer
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
@@ -50,3 +51,17 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+    
+class CreateEmployeeView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            user.rol = request.data.get('rol', 'cliente')
+            user.direccion = request.data.get('direccion', '')
+            user.ci = request.data.get('ci', '')
+            user.save()
+            return Response({'detail': 'Empleado creado exitosamente.'}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

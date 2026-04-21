@@ -11,6 +11,7 @@ class Order(models.Model):
         ('en_preparacion', 'En preparación'),
         ('listo',          'Listo'),
         ('entregado',      'Entregado'),
+        ('cancelado',      'Cancelado'),
     ]
     PAGO_CHOICES = [
         ('qr',       'QR'),
@@ -24,6 +25,7 @@ class Order(models.Model):
     total         = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     creado_en     = models.DateTimeField(auto_now_add=True)
     confirmado_en = models.DateTimeField(null=True, blank=True)
+    motivo_cancelacion = models.TextField(blank=True, null=True)
 
     class Meta:
         db_table = 'pedidos'
