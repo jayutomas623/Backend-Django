@@ -1,14 +1,15 @@
-"""
-Chatbot operacional — Sprint 4
-Usa NLTK para tokenización y detección de intención por palabras clave.
-Responde preguntas sobre pedidos activos, ventas del día e inventario.
-"""
 import re
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
+
 from django.utils import timezone
 from django.db.models import Sum, Count
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from orders.models import OrderItem, Order
+from menu.models import Product
 
 # ── Importación segura de NLTK ────────────────────────────────────────────────
 try:
@@ -92,9 +93,8 @@ def detectar_intencion(tokens):
     return max(scores, key=scores.get)
 
 
-# ── Handlers ──────────────────────────────────────────────────────────────────
+# ── Handlers Chatbot ──────────────────────────────────────────────────────────
 def handle_ventas_hoy():
-    from orders.models import Order
     hoy   = timezone.now().date()
     total = (
         Order.objects.filter(creado_en__date=hoy, estado='entregado')
@@ -109,7 +109,6 @@ def handle_ventas_hoy():
 
 
 def handle_pedidos_activos():
-    from orders.models import Order
     activos = Order.objects.filter(
         estado__in=['en_espera', 'confirmado', 'en_preparacion']
     )
@@ -126,7 +125,6 @@ def handle_pedidos_activos():
 
 
 def handle_top_productos():
-    from orders.models import OrderItem
     top = (
         OrderItem.objects
         .values('producto__nombre')
@@ -158,7 +156,6 @@ def handle_stock_critico():
 
 
 def handle_cancelados():
-    from orders.models import Order
     hoy = timezone.now().date()
     count_hoy  = Order.objects.filter(creado_en__date=hoy, estado='cancelado').count()
     count_mes  = Order.objects.filter(
@@ -211,7 +208,7 @@ HANDLERS = {
 }
 
 
-# ── Vista ─────────────────────────────────────────────────────────────────────
+# ── Vista Chatbot ─────────────────────────────────────────────────────────────
 class ChatbotView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -237,3 +234,38 @@ class ChatbotView(APIView):
             'intencion': intencion,
             'respuesta': respuesta,
         })
+
+
+# ── Vista Recomendador SPRINT 5 ───────────────────────────────────────────────
+class RecommendProductsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, producto_id):
+        # 1. Obtener todas las órdenes completadas
+        items = OrderItem.objects.filter(pedido__estado='entregado').values('pedido_id', 'producto_id', 'cantidad')
+        df = pd.DataFrame(items)
+
+        if df.empty or len(df['pedido_id'].unique()) < 5:
+            # Fallback si no hay suficientes datos en la DB aún
+            return Response([])
+
+        # 2. Crear una matriz de co-ocurrencia (Usuarios/Pedidos x Productos)
+        matrix = df.pivot_table(index='pedido_id', columns='producto_id', values='cantidad', fill_value=0)
+        
+        # Si el producto solicitado nunca se ha vendido, devolver vacío
+        if int(producto_id) not in matrix.columns:
+            return Response([])
+
+        # 3. Calcular la similitud del coseno entre los productos (transponemos la matriz)
+        item_similarity = cosine_similarity(matrix.T)
+        similarity_df = pd.DataFrame(item_similarity, index=matrix.columns, columns=matrix.columns)
+
+        # 4. Obtener los productos más similares al producto actual (excluyendo el mismo)
+        similar_items = similarity_df[int(producto_id)].sort_values(ascending=False)
+        top_similar_ids = similar_items.drop(int(producto_id)).head(3).index.tolist()
+
+        # 5. Formatear la respuesta
+        recomendados = Product.objects.filter(id__in=top_similar_ids, disponible=True)
+        from menu.serializers import ProductSerializer # Importación retrasada para evitar importes circulares
+        
+        return Response(ProductSerializer(recomendados, many=True, context={'request': request}).data)

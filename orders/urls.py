@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     CreateOrderView, OrderStatusView, ConfirmPaymentView, CancelOrderView,
     # Monitor general
-    MonitorOrdersView,
+    MonitorOrdersView, UpdateOrderItemsView,
     # Panel cajero
     CashierListView, CashierSearchView,
     # Sprint 4 stats
@@ -17,8 +17,9 @@ urlpatterns = [
     path('kitchen/<int:pk>/cancel/',       CancelOrderView.as_view(),    name='kitchen-cancel'),
 
     # ── Monitor general (todos los roles) ───────────────────────────────────
-    path('monitor/',             MonitorOrdersView.as_view(), name='monitor-list'),
-    path('monitor/<int:pk>/action/', MonitorOrdersView.as_view(), name='monitor-action'),
+    path('monitor/',                       MonitorOrdersView.as_view(),    name='monitor-list'),
+    path('monitor/<int:pk>/action/',       MonitorOrdersView.as_view(),    name='monitor-action'),
+    path('monitor/<int:pk>/edit-items/',   UpdateOrderItemsView.as_view(), name='order-edit-items'),
 
     # ── Panel cajero ────────────────────────────────────────────────────────
     path('cashier-list/',   CashierListView.as_view(),   name='cashier-list'),

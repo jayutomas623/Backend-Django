@@ -20,6 +20,7 @@ class Order(models.Model):
 
     codigo        = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     cliente       = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pedidos')
+    mesa          = models.ForeignKey('mesas.Mesa', on_delete=models.SET_NULL, null=True, blank=True, related_name='pedidos')
     estado        = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='en_espera')
     metodo_pago   = models.CharField(max_length=10, choices=PAGO_CHOICES)
     total         = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -32,7 +33,8 @@ class Order(models.Model):
         ordering = ['-creado_en']
 
     def __str__(self):
-        return f'Pedido {str(self.codigo)[:8]} — {self.estado}'
+        mesa_info = f' | Mesa {self.mesa.numero}' if self.mesa else ''
+        return f'Pedido {str(self.codigo)[:8]} — {self.estado}{mesa_info}'
 
 
 class OrderItem(models.Model):

@@ -1,14 +1,20 @@
 from django.utils import timezone
 from django.db.models import Sum, Count
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
+from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.permissions import IsAuthenticated
 from datetime import timedelta
-from .models import Order
+
+# Asegúrate de importar Product de tu app menu y OrderItem de orders
+from menu.models import Product
+from .models import Order, OrderItem
 from .serializers import CreateOrderSerializer, OrderSerializer
-from users.permissions import IsCajero, IsCocina, IsAdmin
+
+# Asumo que IsPersonal existe en tus permisos, si no, puedes cambiarlo por IsCajero o IsAdmin
+from users.permissions import IsCajero, IsCocina, IsAdmin, IsPersonal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,26 +41,6 @@ class OrderStatusView(APIView):
         except Order.DoesNotExist:
             return Response({'detail': 'No encontrado.'}, status=404)
         return Response(OrderSerializer(order).data)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  MONITOR GENERAL DE PEDIDOS  (todos los roles)
-# ─────────────────────────────────────────────────────────────────────────────
-#
-#  GET  /api/orders/monitor/
-#       → Devuelve pedidos activos.
-#         - cliente: solo sus propios pedidos
-#         - staff  : todos los pedidos activos
-#
-#  PATCH /api/orders/monitor/<pk>/action/
-#       Body: { "action": "confirm_payment"|"start"|"ready"|"deliver"|"cancel",
-#               "motivo_cancelacion": "..." (solo para cancel) }
-#       Acciones permitidas por rol:
-#         cajero → confirm_payment, deliver
-#         cocina → start, ready, cancel
-#         admin  → todas
-# ─────────────────────────────────────────────────────────────────────────────
-
 class MonitorOrdersView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -90,7 +76,6 @@ class MonitorOrdersView(APIView):
         es_cajero = user.rol in ('cajero', 'admin')
         es_cocina = user.rol in ('cocina', 'admin')
 
-        # Cajero: confirmar pago en efectivo
         if action == 'confirm_payment':
             if not es_cajero:
                 return Response({'detail': 'Solo el cajero puede confirmar pagos.'}, status=403)
@@ -100,7 +85,6 @@ class MonitorOrdersView(APIView):
             order.confirmado_en = timezone.now()
             order.save()
 
-        # Cocina: iniciar preparación
         elif action == 'start':
             if not es_cocina:
                 return Response({'detail': 'Solo cocina puede iniciar pedidos.'}, status=403)
@@ -109,7 +93,6 @@ class MonitorOrdersView(APIView):
             order.estado = 'en_preparacion'
             order.save()
 
-        # Cocina: marcar listo
         elif action == 'ready':
             if not es_cocina:
                 return Response({'detail': 'Solo cocina puede marcar pedidos listos.'}, status=403)
@@ -118,7 +101,6 @@ class MonitorOrdersView(APIView):
             order.estado = 'listo'
             order.save()
 
-        # Cajero/mesero: marcar entregado
         elif action == 'deliver':
             if not es_cajero:
                 return Response({'detail': 'Solo el cajero puede marcar pedidos entregados.'}, status=403)
@@ -127,7 +109,6 @@ class MonitorOrdersView(APIView):
             order.estado = 'entregado'
             order.save()
 
-        # Cocina/admin: cancelar
         elif action == 'cancel':
             if not es_cocina:
                 return Response({'detail': 'Solo cocina puede cancelar pedidos.'}, status=403)
@@ -147,6 +128,62 @@ class MonitorOrdersView(APIView):
 
         else:
             return Response({'detail': f'Acción desconocida: {action}'}, status=400)
+
+        return Response(OrderSerializer(order).data)
+
+
+class UpdateOrderItemsView(APIView):
+    """Edición atómica de items de un pedido, con recalculo de stock."""
+    permission_classes = [IsPersonal]    
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        try:
+            order = Order.objects.get(pk=pk)
+        except Order.DoesNotExist:
+            return Response({'detail': 'Pedido no encontrado.'}, status=404)
+
+        if order.estado in ['listo', 'entregado', 'cancelado']:
+            return Response({'detail': 'No se puede modificar un pedido en este estado.'}, status=400)
+
+        nuevos_items = request.data.get('items', [])
+        if not nuevos_items:
+            return Response({'detail': 'Debe proveer la lista de items.'}, status=400)
+
+        # 1. Devolver el stock actual de TODOS los productos envasados del pedido
+        for item in order.items.all():
+            if item.producto.tipo == 'envasado':
+                item.producto.stock += item.cantidad
+                item.producto.save()
+        
+        # Limpiar items actuales para recrearlos de forma atómica y calcular un total fresco
+        order.items.all().delete()
+        nuevo_total = 0
+
+        # 2. Reconstruir el pedido con las nuevas cantidades validando stock
+        for item_data in nuevos_items:
+            producto = Product.objects.get(id=item_data['producto_id'])
+            cantidad = int(item_data['cantidad'])
+
+            if producto.tipo == 'envasado':
+                if producto.stock is None or producto.stock < cantidad:
+                    # Revertir la transacción automáticamente levantando una excepción
+                    raise serializers.ValidationError(
+                        f"STOCK_ERROR: Solo quedan {producto.stock} unidades de {producto.nombre}."
+                    )
+                producto.stock -= cantidad
+                producto.save()
+
+            OrderItem.objects.create(
+                pedido=order,
+                producto=producto,
+                cantidad=cantidad,
+                precio_unitario=producto.precio,
+            )
+            nuevo_total += (producto.precio * cantidad)
+
+        order.total = nuevo_total
+        order.save()
 
         return Response(OrderSerializer(order).data)
 

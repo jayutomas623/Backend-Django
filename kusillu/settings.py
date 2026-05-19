@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'users',
     'menu',
     'orders',
+    'mesas',           # ← NUEVO
     'recommendations',
 ]
 
