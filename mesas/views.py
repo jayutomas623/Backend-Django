@@ -17,6 +17,7 @@ class MesaViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsPersonal()]
 
+    # ── Cambiar estado (solo staff) ─────────────────────────────────────────
     @action(detail=True, methods=['patch'], permission_classes=[IsPersonal], url_path='set_estado')
     def set_estado(self, request, pk=None):
         mesa   = self.get_object()
@@ -27,6 +28,36 @@ class MesaViewSet(viewsets.ModelViewSet):
         mesa.save()
         return Response(MesaSerializer(mesa).data)
 
+    @action(detail=True, methods=['patch'], permission_classes=[IsAuthenticated], url_path='liberar')
+    def liberar(self, request, pk=None):
+        mesa = self.get_object()
+        user = request.user
+
+        # Staff libera sin restricciones
+        if user.rol in ('cajero', 'cocina', 'admin'):
+            mesa.estado = 'libre'
+            mesa.save()
+            return Response(MesaSerializer(mesa).data)
+
+        # Cliente: verificar que tiene un pedido en esta mesa
+        from orders.models import Order
+        tiene_pedido = Order.objects.filter(
+            mesa=mesa,
+            cliente=user,
+            estado__in=['confirmado', 'en_preparacion', 'listo', 'entregado'],
+        ).exists()
+
+        if not tiene_pedido:
+            return Response(
+                {'detail': 'Solo puedes liberar una mesa en la que tengas un pedido.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        mesa.estado = 'libre'
+        mesa.save()
+        return Response(MesaSerializer(mesa).data)
+
+    # ── Seed (solo admin) ───────────────────────────────────────────────────
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
     def seed(self, request):
         """Crea el layout inicial de mesas si no existen."""
@@ -48,7 +79,7 @@ class MesaViewSet(viewsets.ModelViewSet):
         created = [Mesa.objects.create(**m) for m in layout]
         return Response(
             {'detail': f'{len(created)} mesas creadas correctamente.'},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
 

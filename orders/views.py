@@ -8,12 +8,10 @@ from rest_framework import status, serializers
 from rest_framework.permissions import IsAuthenticated
 from datetime import timedelta
 
-# Asegúrate de importar Product de tu app menu y OrderItem de orders
 from menu.models import Product
 from .models import Order, OrderItem
 from .serializers import CreateOrderSerializer, OrderSerializer
 
-# Asumo que IsPersonal existe en tus permisos, si no, puedes cambiarlo por IsCajero o IsAdmin
 from users.permissions import IsCajero, IsCocina, IsAdmin, IsPersonal
 
 
@@ -41,6 +39,8 @@ class OrderStatusView(APIView):
         except Order.DoesNotExist:
             return Response({'detail': 'No encontrado.'}, status=404)
         return Response(OrderSerializer(order).data)
+
+
 class MonitorOrdersView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -72,7 +72,6 @@ class MonitorOrdersView(APIView):
         except Order.DoesNotExist:
             return Response({'detail': 'Pedido no encontrado.'}, status=404)
 
-        # ── Permisos por acción ──────────────────────────────────────────────
         es_cajero = user.rol in ('cajero', 'admin')
         es_cocina = user.rol in ('cocina', 'admin')
 
@@ -108,6 +107,8 @@ class MonitorOrdersView(APIView):
                 return Response({'detail': 'El pedido debe estar listo para entregarse.'}, status=400)
             order.estado = 'entregado'
             order.save()
+            # NOTA: la mesa NO se libera automáticamente.
+            # El cliente o el cajero la liberan manualmente cuando la mesa queda libre.
 
         elif action == 'cancel':
             if not es_cocina:
@@ -117,10 +118,9 @@ class MonitorOrdersView(APIView):
             motivo = request.data.get('motivo_cancelacion', '').strip()
             if not motivo:
                 return Response({'detail': 'Debes especificar un motivo de cancelación.'}, status=400)
-            order.estado               = 'cancelado'
-            order.motivo_cancelacion   = motivo
+            order.estado             = 'cancelado'
+            order.motivo_cancelacion = motivo
             order.save()
-            # Devolver stock de envasados
             for item in order.items.all():
                 if item.producto.tipo == 'envasado':
                     item.producto.stock += item.cantidad
@@ -134,7 +134,7 @@ class MonitorOrdersView(APIView):
 
 class UpdateOrderItemsView(APIView):
     """Edición atómica de items de un pedido, con recalculo de stock."""
-    permission_classes = [IsPersonal]    
+    permission_classes = [IsPersonal]
 
     @transaction.atomic
     def patch(self, request, pk):
@@ -150,24 +150,22 @@ class UpdateOrderItemsView(APIView):
         if not nuevos_items:
             return Response({'detail': 'Debe proveer la lista de items.'}, status=400)
 
-        # 1. Devolver el stock actual de TODOS los productos envasados del pedido
+        # 1. Devolver stock actual de productos envasados
         for item in order.items.all():
             if item.producto.tipo == 'envasado':
                 item.producto.stock += item.cantidad
                 item.producto.save()
-        
-        # Limpiar items actuales para recrearlos de forma atómica y calcular un total fresco
+
         order.items.all().delete()
         nuevo_total = 0
 
-        # 2. Reconstruir el pedido con las nuevas cantidades validando stock
+        # 2. Reconstruir con nuevas cantidades
         for item_data in nuevos_items:
             producto = Product.objects.get(id=item_data['producto_id'])
             cantidad = int(item_data['cantidad'])
 
             if producto.tipo == 'envasado':
                 if producto.stock is None or producto.stock < cantidad:
-                    # Revertir la transacción automáticamente levantando una excepción
                     raise serializers.ValidationError(
                         f"STOCK_ERROR: Solo quedan {producto.stock} unidades de {producto.nombre}."
                     )
@@ -189,7 +187,7 @@ class UpdateOrderItemsView(APIView):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  PANEL CAJERO  (vista lista + búsqueda por código)
+#  PANEL CAJERO
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CashierListView(APIView):
@@ -220,7 +218,7 @@ class CashierSearchView(APIView):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ENDPOINTS HEREDADOS (compatibilidad con flujos anteriores)
+#  ENDPOINTS HEREDADOS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConfirmPaymentView(APIView):
@@ -249,8 +247,8 @@ class CancelOrderView(APIView):
         motivo = request.data.get('motivo_cancelacion')
         if not motivo:
             return Response({'detail': 'Debes especificar un motivo para cancelar.'}, status=400)
-        order.estado               = 'cancelado'
-        order.motivo_cancelacion   = motivo
+        order.estado             = 'cancelado'
+        order.motivo_cancelacion = motivo
         order.save()
         for item in order.items.all():
             if item.producto.tipo == 'envasado':
@@ -267,13 +265,12 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAdmin]
 
     def get(self, request):
-        hoy          = timezone.now().date()
-        pedidos_hoy  = Order.objects.filter(creado_en__date=hoy)
-        ventas_hoy   = (
+        hoy         = timezone.now().date()
+        pedidos_hoy = Order.objects.filter(creado_en__date=hoy)
+        ventas_hoy  = (
             pedidos_hoy.filter(estado='entregado')
             .aggregate(total=Sum('total'))['total'] or 0
         )
-        from orders.models import OrderItem
         top = (
             OrderItem.objects
             .values('producto__nombre')
@@ -331,7 +328,7 @@ class HeatmapView(APIView):
             .values('hora', 'dia_semana')
             .annotate(count=Count('id'))
         )
-        DIAS   = {1: 6, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5}
+        DIAS = {1: 6, 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5}
         return Response([
             {'hora': d['hora'], 'dia': DIAS.get(d['dia_semana'], 0), 'count': d['count']}
             for d in data
@@ -342,7 +339,6 @@ class TopProductsView(APIView):
     permission_classes = [IsAdmin]
 
     def get(self, request):
-        from orders.models import OrderItem
         top = (
             OrderItem.objects
             .values('producto__nombre', 'producto__precio')
